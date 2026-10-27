@@ -1,4 +1,5 @@
 
+
 import { useEffect, useRef, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
@@ -8,7 +9,18 @@ import {
   signOut,
   updateProfile
 } from 'firebase/auth'
-import { auth } from './firebase'
+
+import { auth, db } from './firebase'
+
+import {
+  collection,
+  addDoc,
+  onSnapshot,
+  query,
+  where,
+  serverTimestamp
+} from 'firebase/firestore'
+
 import './App.css'
 
 const songs = [
@@ -112,17 +124,62 @@ localStorage.getItem(
   }
 }, [authUser, authLoading])
 
+
 const [artistSongs, setArtistSongs] = useState([])
+const [sharedMedia, setSharedMedia] = useState([])
+
 console.log("Morceaux enregistrés :", artistSongs)
+console.log("Médias partagés :", sharedMedia)
+
+useEffect(() => {
+  const publishedQuery = query(
+    collection(db, 'media'),
+    where('status', '==', 'Publié')
+  )
+
+  const unsubscribe = onSnapshot(
+    publishedQuery,
+    (snapshot) => {
+      const publishedMedia = snapshot.docs.map((doc) => ({
+        ...doc.data(),
+        id: doc.id,
+      }))
+
+      setSharedMedia(publishedMedia)
+    },
+    (error) => {
+      console.error('Erreur de chargement Firestore :', error)
+    }
+  )
+
+  return () => unsubscribe()
+}, [])
+
+const allArtistSongs = [
+  ...artistSongs,
+  ...sharedMedia.filter(
+    (media) => media.type === 'audio'
+  ),
+]
+
+
 const allSongs = [
   ...songs,
-  ...artistSongs
-    .filter(song => song.type === 'audio' && song.url)
-    .map(song => ({
+  ...allArtistSongs
+    .filter((song) => song.url && song.status !== 'Publié')
+    .map((song) => ({
       ...song,
       color: 'purple',
       type: 'MUSIQUE',
       src: song.url,
+    })),
+  ...sharedMedia
+    .filter((media) => media.type === 'audio' && media.url)
+    .map((media) => ({
+      ...media,
+      color: 'purple',
+      type: 'MUSIQUE',
+      src: media.url,
     })),
 ]
 const [uploading, setUploading] = useState(false)
@@ -155,10 +212,22 @@ const matchingSongs = allSongs.filter((song) =>  `${song.title} ${song.artist} $
     .includes(searchText)
 )
 
-const matchingClips = clips.filter((clip) =>
-  `${clip.title} ${clip.artist} ${clip.category}`
+
+const allClips = [
+  ...clips,
+  ...sharedMedia
+    .filter((media) => media.type === 'video' && media.url)
+    .map((media) => ({
+      ...media,
+      src: media.url,
+      category: media.category || 'Musique',
+    })),
+]
+
+const matchingClips = allClips.filter((clip) =>
+  `${clip.title} ${clip.artist} ${clip.category || ''}`
     .toLowerCase()
-    .includes(searchText)
+    .includes(searchText.toLowerCase())
 )
 
 
@@ -434,17 +503,30 @@ const handleMediaUpload = async (e) => {
       )
     }
 
+
     const newSong = {
-      id: mediaData.public_id,
       title,
       artist: artistProfile?.artistName || authUser.displayName || 'Artiste',
       type: file.type.startsWith('video/') ? 'video' : 'audio',
       url: mediaData.secure_url,
-      status: 'En attente',
+      publicId: mediaData.public_id,
+      uid: authUser.uid,
+      status: 'Publié',
       createdAt: new Date().toISOString(),
     }
 
-    const updatedSongs = [...artistSongs, newSong]
+    // Enregistrer le média dans Firebase Firestore
+    const mediaRef = await addDoc(collection(db, 'media'), {
+      ...newSong,
+      createdAt: serverTimestamp(),
+    })
+
+    const savedSong = {
+      ...newSong,
+      id: mediaRef.id,
+    }
+
+    const updatedSongs = [...artistSongs, savedSong]
 
     localStorage.setItem(
       `johnsMusicArtistSongs_${authUser.uid}`,
@@ -452,7 +534,7 @@ const handleMediaUpload = async (e) => {
     )
 
     setArtistSongs(updatedSongs)
-    setUploadMessage('Fichier téléversé avec succès !')
+    setUploadMessage('Fichier publié avec succès !')
     form.reset()
   } catch (error) {
     setUploadError(error.message || 'Une erreur est survenue.')
@@ -1282,10 +1364,11 @@ setShowArtistDashboard(true)
   )}
 
 
+
 <div className="clip-grid">
-  {clips
+  {allClips
     .filter((clip) =>
-      `${clip.title} ${clip.artist} ${clip.category}`
+      `${clip.title} ${clip.artist} ${clip.category || ''}`
         .toLowerCase()
         .includes(videoSearch.trim().toLowerCase())
     )
@@ -1295,14 +1378,17 @@ setShowArtistDashboard(true)
         Essayez un autre titre ou artiste.
       </p>
     ) : (
-      clips
+      allClips
         .filter((clip) =>
-          `${clip.title} ${clip.artist} ${clip.category}`
+          `${clip.title} ${clip.artist} ${clip.category || ''}`
             .toLowerCase()
             .includes(videoSearch.trim().toLowerCase())
         )
         .map((clip) => (
-          <article className="clip-card" key={clip.title}>
+          <article
+            className="clip-card"
+            key={clip.id || clip.src || clip.title}
+          >
             <button
               className="clip-cover video-thumbnail"
               onClick={() => setSelectedClip(clip)}
@@ -1310,15 +1396,9 @@ setShowArtistDashboard(true)
             >
               <video
                 src={clip.src}
-                preload="auto"
+                preload="metadata"
                 muted
                 playsInline
-                onLoadedData={(e) => {
-                  e.currentTarget.currentTime = 1;
-                }}
-                onSeeked={(e) => {
-                  e.currentTarget.pause();
-                }}
               />
               <span className="clip-play">▶</span>
               <span className="clip-badge">CLIP</span>
@@ -1327,25 +1407,24 @@ setShowArtistDashboard(true)
             <h3>{clip.title}</h3>
             <p>{clip.artist}</p>
 
+            <div className="clip-actions">
+              <button
+                className="card-action audio-action"
+                onClick={() => setSelectedClip(clip)}
+              >
+                ▶ Regarder
+              </button>
 
-<div className="clip-actions">
-  <button
-    className="card-action audio-action"
-    onClick={() => setSelectedClip(clip)}
-  >
-    ▶ Regarder
-  </button>
-
-  {clip.src && (
-    <a
-      className="card-action download-action"
-      href={clip.src}
-      download
-    >
-      ⬇ Télécharger
-    </a>
-  )}
-</div>
+              {clip.src && (
+                <a
+                  className="card-action download-action"
+                  href={clip.src}
+                  download
+                >
+                  ⬇ Télécharger
+                </a>
+              )}
+            </div>
           </article>
         ))
     )}
