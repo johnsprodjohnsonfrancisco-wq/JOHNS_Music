@@ -18,9 +18,11 @@ import {
   onSnapshot,
   query,
   where,
-  serverTimestamp
+  serverTimestamp,
+  doc,
+  getDoc,
+  setDoc
 } from 'firebase/firestore'
-
 import './App.css'
 
 const songs = [
@@ -88,6 +90,7 @@ const [showArtistDashboard, setShowArtistDashboard] = useState(false)
 
 const [artistProfile, setArtistProfile] = useState(null)
 
+
 useEffect(() => {
   if (authLoading) return
 
@@ -97,30 +100,45 @@ useEffect(() => {
     return
   }
 
-  try {
-    const savedProfile = JSON.parse(
-localStorage.getItem(
-  `johnsMusicArtistProfile_${authUser.uid}`
-)    )
+  const profileRef = doc(db, 'artistProfiles', authUser.uid)
 
-    if (savedProfile?.uid === authUser.uid) {
-      setArtistProfile(savedProfile)
-
-      const savedSongs = JSON.parse(
-
-localStorage.getItem(
-  `johnsMusicArtistSongs_${authUser.uid}`
-)
-      ) || []
-
-      setArtistSongs(savedSongs)
-    } else {
-      setArtistProfile(null)
-      setArtistSongs([])
+  const unsubscribeProfile = onSnapshot(
+    profileRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        setArtistProfile(snapshot.data())
+      } else {
+        setArtistProfile(null)
+      }
+    },
+    (error) => {
+      console.error('Erreur de chargement du profil artiste :', error)
     }
-  } catch {
-    setArtistProfile(null)
-    setArtistSongs([])
+  )
+
+  const mediaQuery = query(
+    collection(db, 'media'),
+    where('uid', '==', authUser.uid)
+  )
+
+  const unsubscribeMedia = onSnapshot(
+    mediaQuery,
+    (snapshot) => {
+      const userMedia = snapshot.docs.map((item) => ({
+        ...item.data(),
+        id: item.id,
+      }))
+
+      setArtistSongs(userMedia)
+    },
+    (error) => {
+      console.error('Erreur de chargement des médias :', error)
+    }
+  )
+
+  return () => {
+    unsubscribeProfile()
+    unsubscribeMedia()
   }
 }, [authUser, authLoading])
 
@@ -793,52 +811,69 @@ onSubmit={handleForgotPassword}
         </p>
       </div>
 
-      <form
-        className="artist-form"
-        onSubmit={(e) => {
-          e.preventDefault()
 
-          const form = e.currentTarget
-          if (!authUser) {
-  setShowArtistRegister(false)
-  setShowLogin(true)
-  return
-}
-          const profile = {
-            artistName: form.elements.artistName.value.trim(),
-            uid: authUser.uid,
-            fullName: form.elements.fullName.value.trim(),
-            email: form.elements.artistEmail.value.trim(),
-            genre: form.elements.genre.value,
-            bio: form.elements.bio.value.trim(),
-            createdAt: new Date().toISOString()
-          }
+<form
+  className="artist-form"
+  onSubmit={async (e) => {
+    e.preventDefault()
 
-          if (
-            !profile.artistName ||
-            !profile.fullName ||
-            !profile.email ||
-            !profile.genre
-          ) {
-            alert('Veuillez remplir tous les champs obligatoires.')
-            return
-          }
+    const form = e.currentTarget
 
-          try {
+    if (!authUser) {
+      setShowArtistRegister(false)
+      setShowLogin(true)
+      return
+    }
 
+    const profile = {
+      artistName: form.elements.artistName.value.trim(),
+      uid: authUser.uid,
+      fullName: form.elements.fullName.value.trim(),
+      email: form.elements.artistEmail.value.trim(),
+      genre: form.elements.genre.value,
+      bio: form.elements.bio.value.trim(),
+      createdAt:
+        artistProfile?.createdAt || new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
 
-localStorage.setItem(
-  `johnsMusicArtistProfile_${authUser.uid}`,
-  JSON.stringify(profile)
-)
-setArtistProfile(profile)
-setShowArtistRegister(false)
-setShowArtistDashboard(true)
-          } catch {
-            alert("Impossible d'enregistrer le profil.")
-          }
-        }}
-      >
+    if (
+      !profile.artistName ||
+      !profile.fullName ||
+      !profile.email ||
+      !profile.genre
+    ) {
+      alert('Veuillez remplir tous les champs obligatoires.')
+      return
+    }
+
+    try {
+      await setDoc(
+        doc(db, 'artistProfiles', authUser.uid),
+        profile
+      )
+
+      await setDoc(
+        doc(db, 'users', authUser.uid),
+        {
+          uid: authUser.uid,
+          fullName: profile.fullName,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      )
+
+      setArtistProfile(profile)
+      setShowArtistRegister(false)
+      setShowArtistDashboard(true)
+    } catch (error) {
+      console.error('Erreur de sauvegarde du profil :', error)
+      alert(
+        "Impossible d'enregistrer le profil. Vérifie ta connexion Internet."
+      )
+    }
+  }}
+>
         <div className="artist-form-field">
           <label htmlFor="artistName">Nom d’artiste *</label>
           <input
@@ -1436,6 +1471,7 @@ setShowArtistDashboard(true)
 
 
 
+
 <button
   onClick={() => {
     setShowRegister(false)
@@ -1450,21 +1486,9 @@ setShowArtistDashboard(true)
       return
     }
 
-    const profile = (() => {
-      try {
-        return JSON.parse(
-localStorage.getItem(
-  `johnsMusicArtistProfile_${authUser.uid}`
-)        )
-      } catch {
-        return null
-      }
-    })()
-
     setShowArtistRegister(false)
 
-    if (profile) {
-      setArtistProfile(profile)
+    if (artistProfile) {
       setShowArtistDashboard(true)
     } else {
       setShowArtistDashboard(false)
