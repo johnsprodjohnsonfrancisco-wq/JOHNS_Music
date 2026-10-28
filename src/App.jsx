@@ -1,5 +1,5 @@
-
-
+import ChatWidget from './ChatWidget'
+import Chat from './Chat'
 import { useEffect, useRef, useState } from 'react'
 import {
   createUserWithEmailAndPassword,
@@ -46,6 +46,21 @@ const clips = [
 ]
 
 function App() {
+const [showChatPage, setShowChatPage] = useState(
+  window.location.hash === '#chat'
+)
+
+useEffect(() => {
+  const handleHashChange = () => {
+    setShowChatPage(window.location.hash === '#chat')
+  }
+
+  window.addEventListener('hashchange', handleHashChange)
+
+  return () => {
+    window.removeEventListener('hashchange', handleHashChange)
+  }
+}, [])
 const [downloadHistory, setDownloadHistory] = useState(() => {
   try {
     return JSON.parse(
@@ -73,7 +88,44 @@ const recordDownload = (file) => {
   setDownloadHistory(updated)
 }
 const [authUser, setAuthUser] = useState(null)
+const [userProfile, setUserProfile] = useState(null)
+const [showUserProfile, setShowUserProfile] = useState(false)
+const [photoUploading, setPhotoUploading] = useState(false)
+const [photoError, setPhotoError] = useState('')
 const [authLoading, setAuthLoading] = useState(true)
+
+useEffect(() => {
+  if (authLoading) return
+
+  if (!authUser) {
+    setUserProfile(null)
+    return
+  }
+
+  const userRef = doc(db, 'users', authUser.uid)
+
+  const unsubscribe = onSnapshot(
+    userRef,
+    (snapshot) => {
+      if (snapshot.exists()) {
+        setUserProfile(snapshot.data())
+      } else {
+        setUserProfile({
+          uid: authUser.uid,
+          fullName: authUser.displayName || '',
+          email: authUser.email || '',
+          photoURL: authUser.photoURL || '',
+        })
+      }
+    },
+    (error) => {
+      console.error('Erreur de chargement du profil utilisateur :', error)
+    }
+  )
+
+  return () => unsubscribe()
+}, [authUser, authLoading])
+
 const [authBusy, setAuthBusy] = useState(false)
 const [authError, setAuthError] = useState('')
 const [authMessage, setAuthMessage] = useState('')
@@ -211,14 +263,41 @@ const [uploadMessage, setUploadMessage] = useState('')
   const [showLogin, setShowLogin] = useState(false)
   console.log("État de connexion :", showLogin)
   const [currentSong, setCurrentSong] = useState(null)
+  const [showUserMenu, setShowUserMenu] = useState(false)
+  const userMenuRef = useRef(null)
+  useEffect(() => {
+  const handleClickOutside = (event) => {
+    if (
+      userMenuRef.current &&
+      !userMenuRef.current.contains(event.target)
+    ) {
+      setShowUserMenu(false)
+    }
+  }
+
+  document.addEventListener('mousedown', handleClickOutside)
+  document.addEventListener('touchstart', handleClickOutside)
+
+  return () => {
+    document.removeEventListener('mousedown', handleClickOutside)
+    document.removeEventListener('touchstart', handleClickOutside)
+  }
+}, [])
   const [isPlaying, setIsPlaying] = useState(false)
   const [currentTime, setCurrentTime] = useState(0)
   const [duration, setDuration] = useState(0)
   const audioRef = useRef(null)
 
 const [selectedClip, setSelectedClip] = useState(null)
+const videoPlayerRef = useRef(null)
+useEffect(() => {
+  if (!selectedClip || !videoPlayerRef.current) return
 
-
+  videoPlayerRef.current.scrollIntoView({
+    behavior: 'smooth',
+    block: 'center',
+  })
+}, [selectedClip])
 const [videoSearch, setVideoSearch] = useState('')
 const [homeSearch, setHomeSearch] = useState('')
 const [showSearchResults, setShowSearchResults] = useState(false)
@@ -339,6 +418,7 @@ const handleLogin = async (e) => {
   }
 }
 
+
 const handleRegister = async (e) => {
   e.preventDefault()
   setAuthError('')
@@ -369,16 +449,46 @@ const handleRegister = async (e) => {
       password
     )
 
-    await updateProfile(credential.user, {
+    const user = credential.user
+
+    await updateProfile(user, {
       displayName: fullName
     })
+
+    const userProfile = {
+      uid: user.uid,
+      fullName,
+      email: user.email,
+      photoURL: user.photoURL || '',
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    }
+
+    await setDoc(
+      doc(db, 'users', user.uid),
+      userProfile
+    )
 
     setRegisterPassword('')
     setShowRegister(false)
     setShowLogin(false)
-    setAuthMessage('Ton compte a été créé avec succès.')
+    setAuthMessage('Ton compte et ton profil ont été créés avec succès.')
   } catch (error) {
-    setAuthError(getAuthErrorMessage(error))
+    console.error('Erreur de création du compte :', error)
+
+    if (auth.currentUser) {
+      try {
+        await signOut(auth)
+      } catch (logoutError) {
+        console.error('Erreur de déconnexion :', logoutError)
+      }
+    }
+
+    setAuthError(
+      error.code === 'permission-denied'
+        ? "Le compte a été créé, mais Firebase refuse l'enregistrement du profil. Vérifie les règles Firestore."
+        : getAuthErrorMessage(error)
+    )
   } finally {
     setAuthBusy(false)
   }
@@ -424,7 +534,95 @@ const handleLogout = async () => {
     setAuthError(getAuthErrorMessage(error))
   }
 }
+const handleProfilePhotoUpload = async (e) => {
+  const file = e.target.files?.[0]
+  if (!file || !authUser) return
 
+  if (!file.type.startsWith('image/')) {
+    setPhotoError('Choisis un fichier image.')
+    return
+  }
+
+  if (file.size > 5 * 1024 * 1024) {
+    setPhotoError('La photo ne doit pas dépasser 5 Mo.')
+    return
+  }
+
+  setPhotoUploading(true)
+  setPhotoError('')
+  setAuthMessage('')
+
+  try {
+    const token = await authUser.getIdToken()
+
+    const signatureResponse = await fetch(
+      'https://johns-music-api.johnsprodjohnsonfrancisco.workers.dev/sign-upload',
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ resourceType: 'image' }),
+      }
+    )
+
+    const signatureData = await signatureResponse.json()
+
+    if (!signatureResponse.ok) {
+      throw new Error(signatureData.error || 'Impossible de préparer le téléversement.')
+    }
+
+    const uploadData = new FormData()
+    uploadData.append('file', file)
+    uploadData.append('api_key', signatureData.apiKey)
+    uploadData.append('timestamp', String(signatureData.timestamp))
+    uploadData.append('folder', signatureData.folder)
+    uploadData.append('signature', signatureData.signature)
+
+    const uploadResponse = await fetch(
+      `https://api.cloudinary.com/v1_1/${signatureData.cloudName}/image/upload`,
+      {
+        method: 'POST',
+        body: uploadData,
+      }
+    )
+
+    const uploadedImage = await uploadResponse.json()
+
+    if (!uploadResponse.ok) {
+      throw new Error(uploadedImage.error?.message || 'Échec du téléversement de la photo.')
+    }
+
+    const photoURL = uploadedImage.secure_url
+
+    await updateProfile(authUser, { photoURL })
+
+    await setDoc(
+      doc(db, 'users', authUser.uid),
+      {
+        uid: authUser.uid,
+        fullName: userProfile?.fullName || authUser.displayName || '',
+        email: authUser.email || '',
+        photoURL,
+        updatedAt: new Date().toISOString(),
+      },
+      { merge: true }
+    )
+
+    setUserProfile((previous) => ({
+      ...previous,
+      photoURL,
+    }))
+
+    setAuthMessage('Photo de profil mise à jour.')
+  } catch (error) {
+    setPhotoError(error.message || 'Une erreur est survenue.')
+  } finally {
+    setPhotoUploading(false)
+    e.target.value = ''
+  }
+}
 const handleMediaUpload = async (e) => {
   e.preventDefault()
 
@@ -563,7 +761,31 @@ const handleMediaUpload = async (e) => {
 
   return (
     <div className="app">
-      
+
+{showChatPage && (
+  <div className="chat-page">
+    <button
+      type="button"
+      className="chat-back-button"
+      onClick={() => {
+        window.location.hash = '#accueil'
+      }}
+    >
+      <span className="chat-back-icon">←</span>
+      <span>Retour à JOHNS_Music</span>
+    </button>
+
+    <Chat
+      onLogin={() => {
+        setShowChatPage(false)
+        window.location.hash = '#accueil'
+        setShowLogin(true)
+      }}
+    />
+  </div>
+)}
+{!showChatPage && (
+  <>
       {showLogin && (
         <div className="login-overlay" onClick={() => setShowLogin(false)}>
           <div className="login-modal" onClick={(e) => e.stopPropagation()}>
@@ -783,6 +1005,141 @@ onSubmit={handleForgotPassword}
   </div>
 )}
 
+
+{showUserProfile && (
+  <div
+    className="login-overlay"
+    onClick={() => setShowUserProfile(false)}
+  >
+    <div
+      className="login-modal"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <button
+        type="button"
+        className="login-close"
+        onClick={() => setShowUserProfile(false)}
+        aria-label="Fermer"
+      >
+        ✕
+      </button>
+<div className="profile-photo-editor">
+  {userProfile?.photoURL || authUser?.photoURL ? (
+    <img
+      src={userProfile?.photoURL || authUser?.photoURL}
+      alt="Photo de profil"
+      className="profile-photo-preview"
+    />
+  ) : (
+    <div className="profile-photo-placeholder">
+      {(userProfile?.fullName || authUser?.displayName || 'U')
+        .charAt(0)
+        .toUpperCase()}
+    </div>
+  )}
+
+  <label className="profile-photo-button">
+    {photoUploading ? 'Envoi en cours...' : 'Changer la photo'}
+    <input
+      type="file"
+      accept="image/*"
+      onChange={handleProfilePhotoUpload}
+      disabled={photoUploading}
+      hidden
+    />
+  </label>
+
+  {photoError && <p role="alert">{photoError}</p>}
+</div>
+      <h2>Mon profil</h2>
+      <p>Gère les informations de ton compte JOHNS_Music.</p>
+
+      {authError && <p role="alert">{authError}</p>}
+      {authMessage && <p role="status">{authMessage}</p>}
+
+      <form
+        onSubmit={async (e) => {
+          e.preventDefault()
+          setAuthError('')
+          setAuthMessage('')
+          setAuthBusy(true)
+
+          const fullName =
+            e.currentTarget.elements.profileFullName.value.trim()
+
+          if (!fullName) {
+            setAuthError('Le nom complet est obligatoire.')
+            setAuthBusy(false)
+            return
+          }
+
+          try {
+            await updateProfile(authUser, {
+              displayName: fullName,
+            })
+
+            await setDoc(
+              doc(db, 'users', authUser.uid),
+              {
+                uid: authUser.uid,
+                fullName,
+                email: authUser.email || '',
+                photoURL: authUser.photoURL || '',
+                updatedAt: new Date().toISOString(),
+              },
+              { merge: true }
+            )
+
+            setUserProfile((previous) => ({
+              ...(previous || {}),
+              uid: authUser.uid,
+              fullName,
+              email: authUser.email || '',
+              photoURL: authUser.photoURL || '',
+            }))
+
+            setAuthMessage('Profil mis à jour avec succès.')
+          } catch (error) {
+            console.error('Erreur de modification du profil :', error)
+            setAuthError(
+              "Impossible de modifier le profil. Vérifie ta connexion et les règles Firestore."
+            )
+          } finally {
+            setAuthBusy(false)
+          }
+        }}
+      >
+        <label htmlFor="profileFullName">Nom complet</label>
+        <input
+          id="profileFullName"
+          name="profileFullName"
+          type="text"
+          defaultValue={
+            userProfile?.fullName || authUser?.displayName || ''
+          }
+          placeholder="Ton nom complet"
+          maxLength={100}
+          required
+        />
+
+        <label>Adresse e-mail</label>
+        <input
+          type="email"
+          value={authUser?.email || ''}
+          readOnly
+        />
+
+        <button
+          type="submit"
+          className="login-submit"
+          disabled={authBusy}
+        >
+          {authBusy ? 'Enregistrement…' : 'Enregistrer les modifications'}
+        </button>
+      </form>
+    </div>
+  </div>
+)}
 
 {showArtistRegister && (
   <div
@@ -1231,15 +1588,63 @@ onSubmit={handleForgotPassword}
 
 
 
-{authLoading ? null : authUser ? (
-  <button
-    className="login-button"
-    onClick={handleLogout}
-  >
-    <span aria-hidden="true">♙</span>
-    Se déconnecter
-  </button>
-) : (
+{!authLoading && authUser && (
+<div className="user-menu-container" ref={userMenuRef}>    <button
+      type="button"
+      className="login-button header-profile-button"
+      onClick={() => setShowUserMenu((prev) => !prev)}
+      aria-expanded={showUserMenu}
+    >
+      {userProfile?.photoURL || authUser?.photoURL ? (
+        <img
+          src={userProfile?.photoURL || authUser?.photoURL}
+          alt="Photo de profil"
+          className="header-profile-photo"
+        />
+      ) : (
+        <span className="header-profile-avatar">
+          {(userProfile?.fullName || authUser?.displayName || 'U')
+            .charAt(0)
+            .toUpperCase()}
+        </span>
+      )}
+
+      <span className="header-profile-name">
+        {userProfile?.fullName || authUser?.displayName || 'Mon profil'}
+      </span>
+      <span aria-hidden="true">▾</span>
+    </button>
+
+    {showUserMenu && (
+      <div className="user-dropdown">
+        <button
+          type="button"
+          onClick={() => {
+            setShowUserMenu(false)
+            setAuthError('')
+            setAuthMessage('')
+            setShowUserProfile(true)
+          }}
+        >
+          Mon profil
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setShowUserMenu(false)
+            handleLogout()
+          }}
+        >
+          Déconnexion
+        </button>
+
+      </div>
+    )}
+  </div>
+)}
+
+{authLoading ? null : !authUser ? (
   <button
     className="login-button"
     onClick={() => setShowLogin(true)}
@@ -1247,7 +1652,7 @@ onSubmit={handleForgotPassword}
     <span aria-hidden="true">♙</span>
     Se connecter
   </button>
-)}
+) : null}
 </header>
 
         <section className="hero">
@@ -1359,8 +1764,10 @@ onSubmit={handleForgotPassword}
   </div>
 
   {selectedClip && (
-    <div className="video-player-panel">
-      <div className="video-player-heading">
+<div
+  className="video-player-panel"
+  ref={videoPlayerRef}
+>      <div className="video-player-heading">
         <div>
           <h2>{selectedClip.title}</h2>
           <p>{selectedClip.artist}</p>
@@ -1585,7 +1992,10 @@ onSubmit={handleForgotPassword}
           </div>
         )}
 
+        <ChatWidget />
       </main>
+    </>
+  )}
     </div>
   )
 }

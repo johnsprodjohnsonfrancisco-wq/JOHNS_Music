@@ -1,0 +1,33 @@
+.chat-float-button {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  z-index: 9999;
+
+  width: 56px;
+  height: 56px;
+  border: none;
+  border-radius: 50%;
+
+  display: flex;
+  align-items: center;
+  justify-content: center;
+
+  background: #e11d48;
+  color: white;
+  font-size: 27px;
+
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+  cursor: pointer;
+  transition: transform 0.2s, background 0.2s;
+}
+
+.chat-float-button:hover {
+  background: #be123c;
+  transform: scale(1.08);
+}
+
+.chat-float-button:focus-visible {
+  outline: 3px solid white;
+  outline-offset: 3px;
+}
