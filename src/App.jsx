@@ -258,6 +258,8 @@ const [uploadMessage, setUploadMessage] = useState('')
   const [showArtistRegister, setShowArtistRegister] = useState(false)
   const [showForgotPassword, setShowForgotPassword] = useState(false)
   const [showPassword, setShowPassword] = useState(false)
+  const [showRegisterPassword, setShowRegisterPassword] = useState(false)
+const [showConfirmPassword, setShowConfirmPassword] = useState(false)
   const [showRegister, setShowRegister] = useState(false)
   const [registerPassword, setRegisterPassword] = useState('')
   const [showLogin, setShowLogin] = useState(false)
@@ -810,26 +812,27 @@ const handleMediaUpload = async (e) => {
   required
 />
 
-              <label>Mot de passe</label>
+
+<label>Mot de passe</label>
 
 <div className="password-field">
   <input
-  type={showPassword ? "text" : "password"}
-  name="password"
-  placeholder="Ton mot de passe"
-  autoComplete="current-password"
-  required
-/>
+    type={showPassword ? 'text' : 'password'}
+    name="password"
+    placeholder="Ton mot de passe"
+    autoComplete="current-password"
+    required
+  />
 
-<button
-  type="button"
-  className="password-toggle"
-  onClick={() => setShowPassword(!showPassword)}
->
-  {showPassword ? "🙈" : "👁️"}
-</button>
+  <button
+    type="button"
+    className="password-toggle"
+    onClick={() => setShowPassword((prev) => !prev)}
+    aria-label={showPassword ? 'Masquer le mot de passe' : 'Afficher le mot de passe'}
+  >
+    {showPassword ? '🙈' : '👁️'}
+  </button>
 </div>
-
               <button type="submit" className="login-submit">
                 Se connecter
               </button>

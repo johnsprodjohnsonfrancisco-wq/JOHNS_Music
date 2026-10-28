@@ -1,5 +1,5 @@
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   collection,
   onSnapshot,
@@ -20,129 +20,246 @@ export default function Chat({ onLogin }) {
   const [messages, setMessages] = useState([])
   const [text, setText] = useState('')
   const [recipientId, setRecipientId] = useState('')
+  const [search, setSearch] = useState('')
+  const [members, setMembers] = useState([])
   const [error, setError] = useState('')
+  const [loadingMembers, setLoadingMembers] = useState(false)
+
   const user = auth.currentUser
 
+  const selectedMember = members.find(
+    (member) => member.uid === recipientId
+  )
+
+  // Charger les profils des membres connectés à la communauté.
   useEffect(() => {
-    if (!user) return
+    if (!user || mode !== 'private') return
 
-    let messagesQuery
-    let conversationId
+    setLoadingMembers(true)
+    setError('')
 
-    if (mode === 'public') {
-      messagesQuery = query(
-        collection(db, 'publicChat'),
-        orderBy('createdAt', 'asc'),
-        limit(200)
-      )
-    } else {
-      if (!recipientId.trim() || recipientId === user.uid) {
-        setMessages([])
-        return
+    const unsubscribe = onSnapshot(
+      collection(db, 'users'),
+      (snapshot) => {
+        const list = snapshot.docs
+          .map((item) => {
+            const data = item.data()
+
+            return {
+              uid: data.uid || item.id,
+              name:
+                data.fullName ||
+                data.displayName ||
+                data.username ||
+                data.name ||
+                'Membre',
+              photoURL: data.photoURL || '',
+            }
+          })
+          .filter(
+            (member) =>
+              member.uid !== user.uid &&
+              member.name.trim() !== ''
+          )
+
+        setMembers(list)
+        setLoadingMembers(false)
+      },
+      (err) => {
+        console.error('Erreur de chargement des membres :', err)
+        setError(
+          'Impossible de charger les membres. Les règles Firestore doivent autoriser la lecture des profils publics.'
+        )
+        setLoadingMembers(false)
       }
+    )
 
-      conversationId = [user.uid, recipientId.trim()].sort().join('_')
-      messagesQuery = query(
-        collection(db, 'privateChats', conversationId, 'messages'),
-        orderBy('createdAt', 'asc'),
-        limit(200)
+    return unsubscribe
+  }, [user?.uid, mode])
+
+  const filteredMembers = useMemo(() => {
+    const term = search.trim().toLocaleLowerCase()
+
+    if (!term) return []
+
+    return members
+      .filter((member) =>
+        member.name.toLocaleLowerCase().includes(term)
       )
+      .slice(0, 20)
+  }, [members, search])
+
+  // Charger les messages publics ou privés.
+  useEffect(() => {
+    if (!user) {
+      setMessages([])
+      return
     }
 
-    return onSnapshot(
+    if (mode === 'private' && !recipientId) {
+      setMessages([])
+      return
+    }
+
+    const conversationId =
+      mode === 'private'
+        ? [user.uid, recipientId].sort().join('_')
+        : null
+
+    const messagesRef =
+      mode === 'public'
+        ? collection(db, 'publicChat')
+        : collection(
+            db,
+            'privateChats',
+            conversationId,
+            'messages'
+          )
+
+    const messagesQuery = query(
+      messagesRef,
+      orderBy('createdAt', 'asc'),
+      limit(200)
+    )
+
+    const unsubscribe = onSnapshot(
       messagesQuery,
       (snapshot) => {
-        setMessages(snapshot.docs.map((item) => ({
-          id: item.id,
-          ...item.data(),
-        })))
+        setMessages(
+          snapshot.docs.map((item) => ({
+            id: item.id,
+            ...item.data(),
+          }))
+        )
         setError('')
       },
-      (err) => setError(err.message)
+      (err) => {
+        console.error('Erreur de chargement des messages :', err)
+        setError(
+          'Impossible de charger les messages. Vérifie les règles Firestore.'
+        )
+      }
     )
+
+    return unsubscribe
   }, [mode, recipientId, user?.uid])
+
+  function selectMember(member) {
+    setRecipientId(member.uid)
+    setSearch('')
+    setMessages([])
+    setError('')
+  }
 
   async function sendMessage(event) {
     event.preventDefault()
     setError('')
 
-    const message = text.trim()
+    const messageText = text.trim()
+
     if (!user) {
       setError('Connecte-toi pour discuter.')
       return
     }
-    if (!message) return
+
+    if (!messageText) return
 
     try {
+      const senderName =
+        user.displayName || 'Membre'
+
+      const messageData = {
+        text: messageText,
+        senderId: user.uid,
+        senderName,
+        createdAt: serverTimestamp(),
+      }
+
       if (mode === 'public') {
-        await addDoc(collection(db, 'publicChat'), {
-          text: message,
-          senderId: user.uid,
-          senderName: user.displayName || user.email || 'Membre',
-          createdAt: serverTimestamp(),
-        })
+        await addDoc(collection(db, 'publicChat'), messageData)
       } else {
-        const otherId = recipientId.trim()
-        if (!otherId || otherId === user.uid) {
-          setError('Entre l’identifiant d’un autre membre.')
+        if (!recipientId || recipientId === user.uid) {
+          setError('Recherche et sélectionne un membre.')
           return
         }
 
-        const id = [user.uid, otherId].sort().join('_')
-        const conversationRef = doc(db, 'privateChats', id)
-        const conversation = await getDoc(conversationRef)
+        const membersList = [user.uid, recipientId].sort()
+        const conversationId = membersList.join('_')
 
-        if (!conversation.exists()) {
+        const conversationRef = doc(
+          db,
+          'privateChats',
+          conversationId
+        )
+
+        const conversationSnapshot = await getDoc(conversationRef)
+
+        if (!conversationSnapshot.exists()) {
           await setDoc(conversationRef, {
-            members: [user.uid, otherId].sort(),
+            members: membersList,
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
           })
-        } else if (!(conversation.data().members || []).includes(user.uid) ||
-                   !(conversation.data().members || []).includes(otherId)) {
-          setError('Conversation non autorisée.')
-          return
+        } else {
+          const conversationData = conversationSnapshot.data()
+
+          if (
+            !Array.isArray(conversationData.members) ||
+            !membersList.every((id) =>
+              conversationData.members.includes(id)
+            )
+          ) {
+            setError('Cette conversation n’est pas autorisée.')
+            return
+          }
         }
 
         await addDoc(
-          collection(db, 'privateChats', id, 'messages'),
-          {
-            text: message,
-            senderId: user.uid,
-            senderName: user.displayName || user.email || 'Membre',
-            createdAt: serverTimestamp(),
-          }
+          collection(
+            db,
+            'privateChats',
+            conversationId,
+            'messages'
+          ),
+          messageData
+        )
+
+        await setDoc(
+          conversationRef,
+          { updatedAt: serverTimestamp() },
+          { merge: true }
         )
       }
 
       setText('')
     } catch (err) {
-      setError('Envoi impossible : ' + err.message)
+      console.error('Erreur d’envoi :', err)
+      setError(
+        'Envoi impossible. Vérifie les règles Firestore et réessaie.'
+      )
     }
   }
 
-if (!user) {
-  return (
-    <section className="chat-box chat-login-card">
-      <div className="chat-login-icon">💬</div>
+  if (!user) {
+    return (
+      <section className="chat-box chat-login-card">
+        <div className="chat-login-icon">💬</div>
+        <h2>JOHNS_Music Chat</h2>
+        <p>
+          Connecte-toi pour discuter avec les membres
+          de la communauté JOHNS_Music.
+        </p>
+        <button
+          type="button"
+          className="chat-login-button"
+          onClick={onLogin}
+        >
+          Se connecter →
+        </button>
+      </section>
+    )
+  }
 
-      <h2>JOHNS_Music Chat</h2>
-
-      <p>
-        Connecte-toi pour discuter avec les membres
-        de la communauté JOHNS_Music.
-      </p>
-
-      <button
-        type="button"
-        className="chat-login-button"
-        onClick={onLogin}
-      >
-        Se connecter →
-      </button>
-    </section>
-  )
-}
   return (
     <section className="chat-box">
       <h2>JOHNS_Music Chat</h2>
@@ -151,28 +268,110 @@ if (!user) {
         <button
           type="button"
           className={mode === 'public' ? 'active' : ''}
-          onClick={() => setMode('public')}
+          onClick={() => {
+            setMode('public')
+            setError('')
+          }}
         >
           Public
         </button>
+
         <button
           type="button"
           className={mode === 'private' ? 'active' : ''}
-          onClick={() => setMode('private')}
+          onClick={() => {
+            setMode('private')
+            setError('')
+          }}
         >
-          Privé
+          Messages privés
         </button>
       </div>
 
       {mode === 'private' && (
-        <label className="chat-recipient">
-          UID du destinataire
+        <div className="chat-member-search">
+          <label htmlFor="chat-member-search">
+            Rechercher un membre
+          </label>
+
           <input
-            value={recipientId}
-            onChange={(event) => setRecipientId(event.target.value)}
-            placeholder="Identifiant Firebase du membre"
+            id="chat-member-search"
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="🔍 Nom du membre..."
+            autoComplete="off"
           />
-        </label>
+
+          {loadingMembers && (
+            <p className="chat-empty">Chargement des membres...</p>
+          )}
+
+          {!loadingMembers &&
+            search.trim() !== '' &&
+            filteredMembers.length === 0 && (
+              <p className="chat-empty">
+                Aucun membre trouvé.
+              </p>
+            )}
+
+          {filteredMembers.length > 0 && (
+            <div className="chat-member-results">
+              {filteredMembers.map((member) => (
+                <button
+                  type="button"
+                  key={member.uid}
+                  className="chat-member-result"
+                  onClick={() => selectMember(member)}
+                >
+                  {member.photoURL ? (
+                    <img
+                      src={member.photoURL}
+                      alt=""
+                      className="chat-member-avatar"
+                    />
+                  ) : (
+                    <span className="chat-member-avatar chat-avatar-placeholder">
+                      {member.name.charAt(0).toUpperCase()}
+                    </span>
+                  )}
+
+                  <span className="chat-member-info">
+                    <strong>{member.name}</strong>
+                  </span>
+
+                  <span aria-hidden="true">💬</span>
+                </button>
+              ))}
+            </div>
+          )}
+
+          {selectedMember && (
+            <div className="chat-selected-member">
+              <span>
+                Conversation avec{' '}
+                <strong>{selectedMember.name}</strong>
+              </span>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setRecipientId('')
+                  setMessages([])
+                  setError('')
+                }}
+              >
+                Changer
+              </button>
+            </div>
+          )}
+
+          {!recipientId && (
+            <p className="chat-empty">
+              Recherche un membre et sélectionne-le pour commencer.
+            </p>
+          )}
+        </div>
       )}
 
       <div className="chat-messages">
@@ -189,8 +388,13 @@ if (!user) {
             <p>{message.text}</p>
           </article>
         ))}
+
         {messages.length === 0 && (
-          <p className="chat-empty">Aucun message pour le moment.</p>
+          <p className="chat-empty">
+            {mode === 'private' && !recipientId
+              ? 'Sélectionne un membre pour voir la conversation.'
+              : 'Aucun message pour le moment.'}
+          </p>
         )}
       </div>
 
@@ -200,10 +404,24 @@ if (!user) {
         <input
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder="Écris ton message..."
+          placeholder={
+            mode === 'private' && !recipientId
+              ? 'Sélectionne un membre avant d’écrire'
+              : 'Écris ton message...'
+          }
           maxLength={2000}
+          disabled={mode === 'private' && !recipientId}
         />
-        <button type="submit">Envoyer</button>
+
+        <button
+          type="submit"
+          disabled={
+            !text.trim() ||
+            (mode === 'private' && !recipientId)
+          }
+        >
+          Envoyer
+        </button>
       </form>
     </section>
   )

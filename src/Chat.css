@@ -449,3 +449,121 @@
     border-radius: 18px;
   }
 }
+
+.chat-member-search {
+  position: relative;
+  margin: 16px 0;
+}
+
+.chat-member-search > label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.chat-member-search > input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  border: 1px solid #39465c;
+  border-radius: 10px;
+  background: #101b2d;
+  color: #fff;
+  outline: none;
+}
+
+.chat-member-search > input:focus {
+  border-color: #f54669;
+}
+
+.chat-member-results {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
+.chat-member-result {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px;
+  border: 1px solid #29384e;
+  border-radius: 10px;
+  background: #101b2d;
+  color: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-member-result:hover {
+  border-color: #f54669;
+  background: #19263b;
+}
+
+.chat-member-avatar {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: #f54669;
+  color: #fff;
+  font-weight: 700;
+}
+
+.chat-avatar-placeholder {
+  font-size: 17px;
+}
+
+.chat-member-info {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.chat-member-info strong,
+.chat-member-info small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-member-info small {
+  color: #aab6c8;
+  font-size: 12px;
+}
+
+.chat-selected-member {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid #39465c;
+  border-radius: 10px;
+  color: #fff;
+}
+
+.chat-selected-member button {
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 7px;
+  background: #f54669;
+  color: #fff;
+  cursor: pointer;
+}
+
+.chat-form button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
